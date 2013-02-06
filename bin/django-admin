@@ -1,0 +1,2 @@
+PYTHONPATH=$PYTHONPATH:. exec ./django/bin/django-admin.py "$@"
+

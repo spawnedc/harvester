@@ -1,0 +1,18 @@
+[submodule "submodules/djangotoolbox"]
+	path = submodules/djangotoolbox
+	url = git@github.com:potatolondon/djangotoolbox-1-4.git
+[submodule "submodules/pytz"]
+	path = submodules/pytz
+	url = git@github.com:potatolondon/django-nonrel-pytz.git
+[submodule "submodules/dbindexer"]
+	path = submodules/dbindexer
+	url = https://github.com/potatolondon/dbindexer-1-4
+[submodule "submodules/djangoappengine"]
+	path = submodules/djangoappengine
+	url = https://github.com/potatolondon/djangoappengine-1-4
+[submodule "submodules/django"]
+	path = submodules/django
+	url = https://github.com/potatolondon/django-nonrel-1-4
+[submodule "submodules/autoload"]
+	path = submodules/autoload
+	url = https://github.com/adieu/django-autoload.git
