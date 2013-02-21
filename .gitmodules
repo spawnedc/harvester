@@ -1,9 +1,9 @@
 [submodule "submodules/djangotoolbox"]
 	path = submodules/djangotoolbox
-	url = git@github.com:potatolondon/djangotoolbox-1-4.git
+	url = https://github.com/potatolondon/djangotoolbox-1-4
 [submodule "submodules/pytz"]
 	path = submodules/pytz
-	url = git@github.com:potatolondon/django-nonrel-pytz.git
+	url = https://github.com/potatolondon/django-nonrel-pytz
 [submodule "submodules/dbindexer"]
 	path = submodules/dbindexer
 	url = https://github.com/potatolondon/dbindexer-1-4
