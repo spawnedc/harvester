@@ -46,7 +46,7 @@ else:
 
 NAME_REGEX = r'(?!-)[a-z\d\-]{1,100}'
 FILE_REGEX = r'(?!\^).*(?!\$).{1,256}'
-CLASS_REGEX =  r'^[bB](1|2|4|8)$'
+CLASS_REGEX = r'^[bB](1|2|4|8|4_1G)$'
 OPTIONS_REGEX = r'^[a-z, ]*$'
 STATE_REGEX = r'^(START|STOP|DISABLED)$'
 
@@ -230,6 +230,9 @@ def LoadBackendInfo(backend_info, open_fn=None):
     raise BadConfig("Only one 'backends' clause is allowed.")
 
   info = backend_info[0]
+  if not info.backends:
+    return BackendInfoExternal(backends=[])
+
   for backend in info.backends:
     backend.Init()
   return info

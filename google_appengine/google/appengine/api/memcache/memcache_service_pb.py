@@ -40,20 +40,14 @@ class MemcacheServiceError(ProtocolBuffer.ProtocolMessage):
   UNSPECIFIED_ERROR =    1
   NAMESPACE_NOT_SET =    2
   PERMISSION_DENIED =    3
-  NUM_BACKENDS_UNSPECIFIED =    4
-  MEMCACHE_POOL_HINT_UNSPECIFIED =    5
   INVALID_VALUE =    6
-  MEMCACHE_SHARDING_STRATEGY_UNSPECIFIED =    7
 
   _ErrorCode_NAMES = {
     0: "OK",
     1: "UNSPECIFIED_ERROR",
     2: "NAMESPACE_NOT_SET",
     3: "PERMISSION_DENIED",
-    4: "NUM_BACKENDS_UNSPECIFIED",
-    5: "MEMCACHE_POOL_HINT_UNSPECIFIED",
     6: "INVALID_VALUE",
-    7: "MEMCACHE_SHARDING_STRATEGY_UNSPECIFIED",
   }
 
   def ErrorCode_Name(cls, x): return cls._ErrorCode_NAMES.get(x, "")
@@ -239,30 +233,24 @@ class AppOverride(ProtocolBuffer.ProtocolMessage):
       initialized = 0
       if debug_strs is not None:
         debug_strs.append('Required field: app_id not set.')
-    if (not self.has_num_memcacheg_backends_):
-      initialized = 0
-      if debug_strs is not None:
-        debug_strs.append('Required field: num_memcacheg_backends not set.')
     if (self.has_memcache_sharding_strategy_ and not self.memcache_sharding_strategy_.IsInitialized(debug_strs)): initialized = 0
     return initialized
 
   def ByteSize(self):
     n = 0
     n += self.lengthString(len(self.app_id_))
-    n += self.lengthVarInt64(self.num_memcacheg_backends_)
+    if (self.has_num_memcacheg_backends_): n += 1 + self.lengthVarInt64(self.num_memcacheg_backends_)
     if (self.has_ignore_shardlock_): n += 2
     if (self.has_memcache_pool_hint_): n += 1 + self.lengthString(len(self.memcache_pool_hint_))
     if (self.has_memcache_sharding_strategy_): n += 1 + self.lengthString(self.memcache_sharding_strategy_.ByteSize())
-    return n + 2
+    return n + 1
 
   def ByteSizePartial(self):
     n = 0
     if (self.has_app_id_):
       n += 1
       n += self.lengthString(len(self.app_id_))
-    if (self.has_num_memcacheg_backends_):
-      n += 1
-      n += self.lengthVarInt64(self.num_memcacheg_backends_)
+    if (self.has_num_memcacheg_backends_): n += 1 + self.lengthVarInt64(self.num_memcacheg_backends_)
     if (self.has_ignore_shardlock_): n += 2
     if (self.has_memcache_pool_hint_): n += 1 + self.lengthString(len(self.memcache_pool_hint_))
     if (self.has_memcache_sharding_strategy_): n += 1 + self.lengthString(self.memcache_sharding_strategy_.ByteSizePartial())
@@ -278,8 +266,9 @@ class AppOverride(ProtocolBuffer.ProtocolMessage):
   def OutputUnchecked(self, out):
     out.putVarInt32(10)
     out.putPrefixedString(self.app_id_)
-    out.putVarInt32(16)
-    out.putVarInt32(self.num_memcacheg_backends_)
+    if (self.has_num_memcacheg_backends_):
+      out.putVarInt32(16)
+      out.putVarInt32(self.num_memcacheg_backends_)
     if (self.has_ignore_shardlock_):
       out.putVarInt32(24)
       out.putBoolean(self.ignore_shardlock_)

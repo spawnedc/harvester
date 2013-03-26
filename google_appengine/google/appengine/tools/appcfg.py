@@ -33,6 +33,7 @@ files, and commit or rollback the transaction.
 
 
 import calendar
+import copy
 import datetime
 import errno
 import getpass
@@ -63,7 +64,6 @@ from google.appengine.api import croninfo
 from google.appengine.api import dispatchinfo
 from google.appengine.api import dosinfo
 from google.appengine.api import queueinfo
-from google.appengine.api import validation
 from google.appengine.api import yaml_errors
 from google.appengine.api import yaml_object
 from google.appengine.datastore import datastore_index
@@ -75,22 +75,12 @@ try:
 except ImportError:
   appengine_rpc_httplib2 = None
 from google.appengine.tools import bulkloader
+from google.appengine.tools import sdk_update_checker
 
 
 LIST_DELIMITER = '\n'
 TUPLE_DELIMITER = '|'
 BACKENDS_ACTION = 'backends'
-
-
-
-
-VERSION_FILE = '../../VERSION'
-
-
-UPDATE_CHECK_TIMEOUT = 3
-
-
-NAG_FILE = '.appcfg_nag'
 
 
 MAX_LOG_LEVEL = 4
@@ -143,6 +133,8 @@ APPCFG_CLIENT_ID = '550516889912.apps.googleusercontent.com'
 APPCFG_CLIENT_NOTSOSECRET = 'ykPq-0UYfKNprLRjVx1hBBar'
 APPCFG_SCOPES = ['https://www.googleapis.com/auth/appengine.admin']
 
+
+STATIC_FILE_PREFIX = '__static__'
 
 class Error(Exception):
   pass
@@ -204,6 +196,8 @@ class FileClassification(object):
       filename: The name of the file.
     """
     self.__static_mime_type = self.__GetMimeTypeIfStaticFile(config, filename)
+    self.__static_app_readable = self.__GetAppReadableIfStaticFile(config,
+                                                                   filename)
     self.__error_mime_type, self.__error_code = self.__LookupErrorBlob(config,
                                                                        filename)
 
@@ -232,6 +226,32 @@ class FileClassification(object):
         if re.match(regex, filename):
           return handler.mime_type or FileClassification.__MimeType(filename)
     return None
+
+  @staticmethod
+  def __GetAppReadableIfStaticFile(config, filename):
+    """Looks up whether a static file is readable by the application.
+
+    Uses the handlers in 'config' to determine if the file should
+    be treated as a static file and if so, if the file should be readable by the
+    application.
+
+    Args:
+      config: The AppInfoExternal object to check the filename against.
+      filename: The name of the file.
+
+    Returns:
+      True if the file is static and marked as app readable, False otherwise.
+    """
+    for handler in config.handlers:
+      handler_type = handler.GetHandlerType()
+      if handler_type in ('static_dir', 'static_files'):
+        if handler_type == 'static_dir':
+          regex = os.path.join(re.escape(handler.GetHandler()), '.*')
+        else:
+          regex = handler.upload
+        if re.match(regex, filename):
+          return handler.application_readable
+    return False
 
   @staticmethod
   def __LookupErrorBlob(config, filename):
@@ -272,7 +292,8 @@ class FileClassification(object):
     return guess
 
   def IsApplicationFile(self):
-    return not self.IsStaticFile() and not self.IsErrorFile()
+    return bool((not self.IsStaticFile() or self.__static_app_readable) and
+                not self.IsErrorFile())
 
   def IsStaticFile(self):
     return bool(self.__static_mime_type)
@@ -302,8 +323,8 @@ def BuildClonePostBody(file_tuples):
   """
   file_list = []
   for tup in file_tuples:
-    path = tup[0]
-    tup = tup[1:]
+    path = tup[1]
+    tup = tup[2:]
     file_list.append(TUPLE_DELIMITER.join([path] + list(tup)))
   return LIST_DELIMITER.join(file_list)
 
@@ -360,58 +381,6 @@ def GetResourceLimits(rpcserver, config):
   return resource_limits
 
 
-class NagFile(validation.Validated):
-  """A validated YAML class to represent the user's nag preferences.
-
-  Attributes:
-    timestamp: The timestamp of the last nag.
-    opt_in: True if the user wants to check for updates on dev_appserver
-      start.  False if not.  May be None if we have not asked the user yet.
-  """
-
-  ATTRIBUTES = {
-      'timestamp': validation.TYPE_FLOAT,
-      'opt_in': validation.Optional(validation.TYPE_BOOL),
-  }
-
-  @staticmethod
-  def Load(nag_file):
-    """Load a single NagFile object where one and only one is expected.
-
-    Args:
-      nag_file: A file-like object or string containing the yaml data to parse.
-
-    Returns:
-      A NagFile instance.
-    """
-    return yaml_object.BuildSingleObject(NagFile, nag_file)
-
-
-def GetVersionObject(isfile=os.path.isfile, open_fn=open):
-  """Gets the version of the SDK by parsing the VERSION file.
-
-  Args:
-    isfile: used for testing.
-    open_fn: Used for testing.
-
-  Returns:
-    A Yaml object or None if the VERSION file does not exist.
-  """
-  version_filename = os.path.join(os.path.dirname(google.appengine.__file__),
-                                  VERSION_FILE)
-  if not isfile(version_filename):
-    logging.error('Could not find version file at %s', version_filename)
-    return None
-
-  version_fh = open_fn(version_filename, 'r')
-  try:
-    version = yaml.safe_load(version_fh)
-  finally:
-    version_fh.close()
-
-  return version
-
-
 def RetryWithBackoff(callable_func, retry_notify_func,
                      initial_delay=1, backoff_factor=2,
                      max_delay=60, max_tries=20):
@@ -460,310 +429,19 @@ def RetryWithBackoff(callable_func, retry_notify_func,
     delay = min(delay * backoff_factor, max_delay)
 
 
-def _VersionList(release):
-  """Parse a version string into a list of ints.
-
-  Args:
-    release: The 'release' version, e.g. '1.2.4'.
-        (Due to YAML parsing this may also be an int or float.)
-
-  Returns:
-    A list of ints corresponding to the parts of the version string
-    between periods.  Example:
-      '1.2.4' -> [1, 2, 4]
-      '1.2.3.4' -> [1, 2, 3, 4]
-
-  Raises:
-    ValueError if not all the parts are valid integers.
-  """
-  return [int(part) for part in str(release).split('.')]
-
-
-class UpdateCheck(object):
-  """Determines if the local SDK is the latest version.
-
-  Nags the user when there are updates to the SDK.  As the SDK becomes
-  more out of date, the language in the nagging gets stronger.  We
-  store a little yaml file in the user's home directory so that we nag
-  the user only once a week.
-
-  The yaml file has the following field:
-    'timestamp': Last time we nagged the user in seconds since the epoch.
-
-  Attributes:
-    rpcserver: An AbstractRpcServer instance used to check for the latest SDK.
-    config: The app's AppInfoExternal.  Needed to determine which api_version
-      the app is using.
-  """
-
-  def __init__(self,
-               rpcserver,
-               config,
-               isdir=os.path.isdir,
-               isfile=os.path.isfile,
-               open_fn=open):
-    """Create a new UpdateCheck.
-
-    Args:
-      rpcserver: The AbstractRpcServer to use.
-      config: The yaml object that specifies the configuration of this
-        application.
-      isdir: Replacement for os.path.isdir (for testing).
-      isfile: Replacement for os.path.isfile (for testing).
-      open_fn: Replacement for the open builtin (for testing).
-    """
-    self.rpcserver = rpcserver
-    self.config = config
-    self.isdir = isdir
-    self.isfile = isfile
-    self.open = open_fn
-
-  @staticmethod
-  def MakeNagFilename():
-    """Returns the filename for the nag file for this user."""
-
-
-
-
-
-    user_homedir = os.path.expanduser('~/')
-    if not os.path.isdir(user_homedir):
-      drive, unused_tail = os.path.splitdrive(os.__file__)
-      if drive:
-        os.environ['HOMEDRIVE'] = drive
-
-    return os.path.expanduser('~/' + NAG_FILE)
-
-  def _ParseVersionFile(self):
-    """Parse the local VERSION file.
-
-    Returns:
-      A Yaml object or None if the file does not exist.
-    """
-    return GetVersionObject(isfile=self.isfile, open_fn=self.open)
-
-  def CheckSupportedVersion(self):
-    """Determines if the app's api_version is supported by the SDK.
-
-    Uses the api_version field from the AppInfoExternal to determine if
-    the SDK supports that api_version.
-
-    Raises:
-      sys.exit if the api_version is not supported.
-    """
-    version = self._ParseVersionFile()
-    if version is None:
-      logging.error('Could not determine if the SDK supports the api_version '
-                    'requested in app.yaml.')
-      return
-    if self.config.api_version not in version['api_versions']:
-      logging.critical('The api_version specified in app.yaml (%s) is not '
-                       'supported by this release of the SDK.  The supported '
-                       'api_versions are %s.',
-                       self.config.api_version, version['api_versions'])
-      sys.exit(1)
-
-  def CheckForUpdates(self):
-    """Queries the server for updates and nags the user if appropriate.
-
-    Queries the server for the latest SDK version at the same time reporting
-    the local SDK version.  The server will respond with a yaml document
-    containing the fields:
-      'release': The name of the release (e.g. 1.2).
-      'timestamp': The time the release was created (YYYY-MM-DD HH:MM AM/PM TZ).
-      'api_versions': A list of api_version strings (e.g. ['1', 'beta']).
-
-    We will nag the user with increasing severity if:
-    - There is a new release.
-    - There is a new release with a new api_version.
-    - There is a new release that does not support the api_version named in
-      self.config.
-    """
-    version = self._ParseVersionFile()
-    if version is None:
-      logging.info('Skipping update check')
-      return
-    logging.info('Checking for updates to the SDK.')
-
-
-
-
-    try:
-      response = self.rpcserver.Send('/api/updatecheck',
-                                     timeout=UPDATE_CHECK_TIMEOUT,
-                                     release=version['release'],
-                                     timestamp=version['timestamp'],
-                                     api_versions=version['api_versions'],
-                                     runtime=self.config.runtime)
-    except urllib2.URLError, e:
-      logging.info('Update check failed: %s', e)
-      return
-
-    latest = yaml.safe_load(response)
-    if version['release'] == latest['release']:
-      logging.info('The SDK is up to date.')
-      return
-
-    try:
-      this_release = _VersionList(version['release'])
-    except ValueError:
-      logging.warn('Could not parse this release version (%r)',
-                   version['release'])
-    else:
-      try:
-        advertised_release = _VersionList(latest['release'])
-      except ValueError:
-        logging.warn('Could not parse advertised release version (%r)',
-                     latest['release'])
-      else:
-        if this_release > advertised_release:
-          logging.info('This SDK release is newer than the advertised release.')
-          return
-
-    api_versions = latest['api_versions']
-    if self.config.api_version not in api_versions:
-      self._Nag(
-          'The api version you are using (%s) is obsolete!  You should\n'
-          'upgrade your SDK and test that your code works with the new\n'
-          'api version.' % self.config.api_version,
-          latest, version, force=True)
-      return
-
-    if self.config.api_version != api_versions[len(api_versions) - 1]:
-      self._Nag(
-          'The api version you are using (%s) is deprecated. You should\n'
-          'upgrade your SDK to try the new functionality.' %
-          self.config.api_version, latest, version)
-      return
-
-    self._Nag('There is a new release of the SDK available.',
-              latest, version)
-
-  def _ParseNagFile(self):
-    """Parses the nag file.
-
-    Returns:
-      A NagFile if the file was present else None.
-    """
-    nag_filename = UpdateCheck.MakeNagFilename()
-    if self.isfile(nag_filename):
-      fh = self.open(nag_filename, 'r')
-      try:
-        nag = NagFile.Load(fh)
-      finally:
-        fh.close()
-      return nag
-    return None
-
-  def _WriteNagFile(self, nag):
-    """Writes the NagFile to the user's nag file.
-
-    If the destination path does not exist, this method will log an error
-    and fail silently.
-
-    Args:
-      nag: The NagFile to write.
-    """
-    nagfilename = UpdateCheck.MakeNagFilename()
-    try:
-      fh = self.open(nagfilename, 'w')
-      try:
-        fh.write(nag.ToYAML())
-      finally:
-        fh.close()
-    except (OSError, IOError), e:
-      logging.error('Could not write nag file to %s. Error: %s', nagfilename, e)
-
-  def _Nag(self, msg, latest, version, force=False):
-    """Prints a nag message and updates the nag file's timestamp.
-
-    Because we don't want to nag the user everytime, we store a simple
-    yaml document in the user's home directory.  If the timestamp in this
-    doc is over a week old, we'll nag the user.  And when we nag the user,
-    we update the timestamp in this doc.
-
-    Args:
-      msg: The formatted message to print to the user.
-      latest: The yaml document received from the server.
-      version: The local yaml version document.
-      force: If True, always nag the user, ignoring the nag file.
-    """
-    nag = self._ParseNagFile()
-    if nag and not force:
-      last_nag = datetime.datetime.fromtimestamp(nag.timestamp)
-      if datetime.datetime.now() - last_nag < datetime.timedelta(weeks=1):
-        logging.debug('Skipping nag message')
-        return
-
-    if nag is None:
-      nag = NagFile()
-    nag.timestamp = time.time()
-    self._WriteNagFile(nag)
-
-    print '****************************************************************'
-    print msg
-    print '-----------'
-    print 'Latest SDK:'
-    print yaml.dump(latest)
-    print '-----------'
-    print 'Your SDK:'
-    print yaml.dump(version)
-    print '-----------'
-    print 'Please visit https://developers.google.com/appengine/downloads'
-    print 'for the latest SDK'
-    print '****************************************************************'
-
-  def AllowedToCheckForUpdates(self, input_fn=raw_input):
-    """Determines if the user wants to check for updates.
-
-    On startup, the dev_appserver wants to check for updates to the SDK.
-    Because this action reports usage to Google when the user is not
-    otherwise communicating with Google (e.g. pushing a new app version),
-    the user must opt in.
-
-    If the user does not have a nag file, we will query the user and
-    save the response in the nag file.  Subsequent calls to this function
-    will re-use that response.
-
-    Args:
-      input_fn: used to collect user input. This is for testing only.
-
-    Returns:
-      True if the user wants to check for updates.  False otherwise.
-    """
-    nag = self._ParseNagFile()
-    if nag is None:
-      nag = NagFile()
-      nag.timestamp = time.time()
-
-    if nag.opt_in is None:
-      answer = input_fn('Allow dev_appserver to check for updates on startup? '
-                        '(Y/n): ')
-      answer = answer.strip().lower()
-      if answer == 'n' or answer == 'no':
-        print ('dev_appserver will not check for updates on startup.  To '
-               'change this setting, edit %s' % UpdateCheck.MakeNagFilename())
-        nag.opt_in = False
-      else:
-
-        print ('dev_appserver will check for updates on startup.  To change '
-               'this setting, edit %s' % UpdateCheck.MakeNagFilename())
-        nag.opt_in = True
-      self._WriteNagFile(nag)
-    return nag.opt_in
-
-
 def MigratePython27Notice():
-  """Encourages the user to migrate from Python 2.5 to Python 2.7.
+  """Tells the user that Python 2.5 runtime is deprecated.
+
+  Encourages the user to migrate from Python 2.5 to Python 2.7.
 
   Prints a message to sys.stdout. The caller should have tested that the user is
   using Python 2.5, so as not to spuriously display this message.
   """
   print (
-      'Notice: The Python 2.7 runtime is now available, and comes with a '
-      'range of new features including concurrent requests and more '
-      'libraries. Learn how simple it is to migrate your application to '
-      'Python 2.7 at '
+      'WARNING: This application is using the Python 2.5 runtime, which is '
+      'deprecated! It should be updated to the Python 2.7 runtime as soon as '
+      'possible, which offers performance improvements and many new features. '
+      'Learn how simple it is to migrate your application to Python 2.7 at '
       'https://developers.google.com/appengine/docs/python/python25/migrate27.')
 
 
@@ -912,7 +590,7 @@ class PagespeedEntryUpload(object):
 class DefaultVersionSet(object):
   """Provides facilities to set the default (serving) version."""
 
-  def __init__(self, rpcserver, app_id, version):
+  def __init__(self, rpcserver, app_id, server, version):
     """Creates a new DefaultVersionSet.
 
     Args:
@@ -923,14 +601,20 @@ class DefaultVersionSet(object):
     """
     self.rpcserver = rpcserver
     self.app_id = app_id
+    self.server = server
     self.version = version
 
   def SetVersion(self):
     """Sets the default version."""
-    StatusUpdate('Setting default version of application %s to %s.'
-                 % (self.app_id, self.version))
+    if self.server:
+      StatusUpdate('Setting default version of server %s of application %s '
+                   'to %s.' % (self.app_id, self.server, self.version))
+    else:
+      StatusUpdate('Setting default version of application %s to %s.'
+                   % (self.app_id, self.version))
     self.rpcserver.Send('/api/appversion/setdefault',
                         app_id=self.app_id,
+                        server=self.server,
                         version=self.version)
 
 
@@ -1649,13 +1333,16 @@ def EnsureDir(path):
       raise
 
 
-def DoDownloadApp(rpcserver, out_dir, app_id, app_version):
+def DoDownloadApp(rpcserver, out_dir, app_id, server, app_version):
   """Downloads the files associated with a particular app version.
 
   Args:
     rpcserver: The RPC server to use to download.
     out_dir: The directory the files should be downloaded to.
     app_id: The app ID of the app whose files we want to download.
+    server: The server we want to download from.  Can be:
+      - None: We'll download from the default server.
+      - <server>: We'll download from the specified server.
     app_version: The version number we want to download.  Can be:
       - None: We'll download the latest default version.
       - <major>: We'll download the latest minor version.
@@ -1665,6 +1352,8 @@ def DoDownloadApp(rpcserver, out_dir, app_id, app_version):
   StatusUpdate('Fetching file list...')
 
   url_args = {'app_id': app_id}
+  if server:
+    url_args['server'] = server
   if app_version is not None:
     url_args['version_match'] = app_version
 
@@ -1787,7 +1476,8 @@ class AppVersionUpload(object):
     started: True iff the StartServing method has been called.
   """
 
-  def __init__(self, rpcserver, config, backend=None,
+  def __init__(self, rpcserver, config, server_yaml_path='app.yaml',
+               backend=None,
                error_fh=None):
     """Creates a new AppVersionUpload.
 
@@ -1796,6 +1486,8 @@ class AppVersionUpload(object):
         or TestRpcServer.
       config: An AppInfoExternal object that specifies the configuration for
         this application.
+      server_yaml_path: The (string) path to the yaml file corresponding to
+        <config>, relative to the bundle directory.
       backend: If specified, indicates the update applies to the given backend.
         The backend name must match an entry in the backends: stanza.
       error_fh: Unexpected HTTPErrors are printed to this file handle.
@@ -1835,6 +1527,10 @@ class AppVersionUpload(object):
     self.blob_batcher = UploadBatcher('blob', self.rpcserver, self.params)
     self.errorblob_batcher = UploadBatcher('errorblob', self.rpcserver,
                                            self.params)
+
+    if not self.config.vm_settings:
+      self.config.vm_settings = appinfo.VmSettings()
+    self.config.vm_settings['server_yaml_path'] = server_yaml_path
 
   def Send(self, url, payload=''):
     """Sends a request to the server, with common params."""
@@ -1881,7 +1577,20 @@ class AppVersionUpload(object):
     """
     assert not self.in_transaction, 'Already in a transaction.'
 
-    self.Send('/api/appversion/create', payload=self.config.ToYAML())
+
+
+
+    config_copy = copy.deepcopy(self.config)
+    for url in config_copy.handlers:
+      handler_type = url.GetHandlerType()
+      if url.application_readable:
+        if handler_type == 'static_dir':
+          url.static_dir = os.path.join(STATIC_FILE_PREFIX, url.static_dir)
+        elif handler_type == 'static_files':
+          url.static_files = os.path.join(STATIC_FILE_PREFIX, url.static_files)
+          url.upload = os.path.join(STATIC_FILE_PREFIX, url.upload)
+
+    self.Send('/api/appversion/create', payload=config_copy.ToYAML())
     self.in_transaction = True
 
     files_to_clone = []
@@ -1891,7 +1600,10 @@ class AppVersionUpload(object):
       file_classification = FileClassification(self.config, path)
 
       if file_classification.IsStaticFile():
-        blobs_to_clone.append((path, content_hash,
+        upload_path = path
+        if file_classification.IsApplicationFile():
+          upload_path = os.path.join(STATIC_FILE_PREFIX, path)
+        blobs_to_clone.append((path, upload_path, content_hash,
                                file_classification.StaticMimeType()))
 
 
@@ -1903,7 +1615,7 @@ class AppVersionUpload(object):
         errorblobs[path] = content_hash
 
       if file_classification.IsApplicationFile():
-        files_to_clone.append((path, content_hash))
+        files_to_clone.append((path, path, content_hash))
 
     files_to_upload = {}
 
@@ -1929,8 +1641,14 @@ class AppVersionUpload(object):
         chunk = files[i:min(len(files), i + max_files)]
         result = self.Send(url, payload=BuildClonePostBody(chunk))
         if result:
-          files_to_upload.update(dict(
-              (f, self.files[f]) for f in result.split(LIST_DELIMITER)))
+          to_upload = {}
+          for f in result.split(LIST_DELIMITER):
+            for entry in files:
+              real_path, upload_path = entry[:2]
+              if f == upload_path:
+                to_upload[real_path] = self.files[real_path]
+                break
+          files_to_upload.update(to_upload)
 
     CloneFiles('/api/appversion/cloneblobs', blobs_to_clone, 'static')
     CloneFiles('/api/appversion/clonefiles', files_to_clone, 'application')
@@ -1965,7 +1683,10 @@ class AppVersionUpload(object):
     file_classification = FileClassification(self.config, path)
     payload = file_handle.read()
     if file_classification.IsStaticFile():
-      self.blob_batcher.AddToBatch(path, payload,
+      upload_path = path
+      if file_classification.IsApplicationFile():
+        upload_path = os.path.join(STATIC_FILE_PREFIX, path)
+      self.blob_batcher.AddToBatch(upload_path, payload,
                                    file_classification.StaticMimeType())
 
 
@@ -2340,8 +2061,9 @@ def GetFileLength(fh):
   return length
 
 
-def GetUserAgent(get_version=GetVersionObject,
-                 get_platform=appengine_rpc.GetPlatformToken):
+def GetUserAgent(get_version=sdk_update_checker.GetVersionObject,
+                 get_platform=appengine_rpc.GetPlatformToken,
+                 sdk_product=SDK_PRODUCT):
   """Determines the value of the 'User-agent' header to use for HTTP requests.
 
   If the 'APPCFG_SDK_NAME' environment variable is present, that will be
@@ -2369,7 +2091,7 @@ def GetUserAgent(get_version=GetVersionObject,
     else:
       release = version['release']
 
-    product_tokens.append('%s/%s' % (SDK_PRODUCT, release))
+    product_tokens.append('%s/%s' % (sdk_product, release))
 
 
   product_tokens.append(get_platform())
@@ -2381,7 +2103,7 @@ def GetUserAgent(get_version=GetVersionObject,
   return ' '.join(product_tokens)
 
 
-def GetSourceName(get_version=GetVersionObject):
+def GetSourceName(get_version=sdk_update_checker.GetVersionObject):
   """Gets the name of this source version."""
   version = get_version()
   if version is None:
@@ -2421,7 +2143,7 @@ class AppCfgApp(object):
                password_input_fn=getpass.getpass,
                out_fh=sys.stdout,
                error_fh=sys.stderr,
-               update_check_class=UpdateCheck,
+               update_check_class=sdk_update_checker.SDKUpdateChecker,
                throttle_class=None,
                opener=open,
                file_iterator=FileIterator,
@@ -2443,7 +2165,8 @@ class AppCfgApp(object):
       password_input_fn: Function used for getting user password.
       out_fh: All normal output is printed to this file handle.
       error_fh: Unexpected HTTPErrors are printed to this file handle.
-      update_check_class: UpdateCheck class (can be replaced for testing).
+      update_check_class: sdk_update_checker.SDKUpdateChecker class (can be
+        replaced for testing).
       throttle_class: A class to use instead of ThrottledHttpRpcServer
         (only used in the bulkloader).
       opener: Function used for opening files.
@@ -2588,6 +2311,12 @@ class AppCfgApp(object):
       self.options.oauth2 = True
 
 
+    if self.options.oauth2_client_id:
+      self.oauth_client_id = self.options.oauth2_client_id
+    if self.options.oauth2_client_secret:
+      self.oauth_client_secret = self.options.oauth2_client_secret
+
+
 
 
     self.opener = opener
@@ -2671,7 +2400,7 @@ class AppCfgApp(object):
                       metavar='SERVER', help='The App Engine server.')
     parser.add_option('--secure', action='store_true', dest='secure',
                       default=True, help=optparse.SUPPRESS_HELP)
-    parser.add_option('--ignore-bad-cert', action='store_true',
+    parser.add_option('--ignore_bad_cert', action='store_true',
                       dest='ignore_certs', default=False,
                       help=optparse.SUPPRESS_HELP)
     parser.add_option('--insecure', action='store_false', dest='secure',
@@ -2711,6 +2440,12 @@ class AppCfgApp(object):
                       dest='oauth2_refresh_token', default=None,
                       help='An existing OAuth2 refresh token to use. Will '
                       'not attempt interactive OAuth approval.')
+    parser.add_option('--oauth2_client_id', action='store',
+                      dest='oauth2_client_id', default=None,
+                      help=optparse.SUPPRESS_HELP)
+    parser.add_option('--oauth2_client_secret', action='store',
+                      dest='oauth2_client_secret', default=None,
+                      help=optparse.SUPPRESS_HELP)
     parser.add_option('--noauth_local_webserver', action='store_false',
                       dest='auth_local_webserver', default=True,
                       help='Do not run a local web server to handle redirects '
@@ -2875,6 +2610,8 @@ class AppCfgApp(object):
     orig_version = appyaml.version
     if self.options.app_id:
       appyaml.application = self.options.app_id
+    if self.options.server_id:
+      appyaml.server = self.options.server_id
     if self.options.version:
       appyaml.version = self.options.version
     if self.options.runtime:
@@ -3015,6 +2752,7 @@ class AppCfgApp(object):
     if app_id is None:
       self.parser.error('You must specify an app ID via -A or --application.')
 
+    server = self.options.server_id
     app_version = self.options.version
 
 
@@ -3029,15 +2767,18 @@ class AppCfgApp(object):
 
     rpcserver = self._GetRpcServer()
 
-    DoDownloadApp(rpcserver, out_dir, app_id, app_version)
+    DoDownloadApp(rpcserver, out_dir, app_id, server, app_version)
 
-  def UpdateVersion(self, rpcserver, basepath, appyaml, backend=None):
+  def UpdateVersion(self, rpcserver, basepath, appyaml, server_yaml_path,
+                    backend=None):
     """Updates and deploys a new appversion.
 
     Args:
       rpcserver: An AbstractRpcServer instance on which RPC calls can be made.
       basepath: The root directory of the version to update.
       appyaml: The AppInfoExternal object parsed from an app.yaml-like file.
+      server_yaml_path: The (string) path to the yaml file, relative to the
+        bundle directory.
       backend: The name of the backend to update, if any.
 
     Returns:
@@ -3093,49 +2834,65 @@ class AppCfgApp(object):
         paths = app_paths + overlay.keys()
         openfunc = ofunc
 
-    appversion = AppVersionUpload(rpcserver, appyaml, backend, self.error_fh)
+    appversion = AppVersionUpload(rpcserver,
+                                  appyaml,
+                                  server_yaml_path=server_yaml_path,
+                                  backend=backend,
+                                  error_fh=self.error_fh)
     return appversion.DoUpload(paths, openfunc)
+
+  def UpdateUsingSpecificFiles(self):
+    """Updates and deploys new app versions based on given config files."""
+    rpcserver = self._GetRpcServer()
+    all_files = [self.basepath] + self.args
+    has_python25_version = False
+
+    for yaml_path in all_files:
+      file_name = os.path.basename(yaml_path)
+      self.basepath = os.path.dirname(yaml_path)
+      if not self.basepath:
+        self.basepath = '.'
+      server_yaml = self._ParseAppInfoFromYaml(self.basepath,
+                                               os.path.splitext(file_name)[0])
+      if server_yaml.runtime == 'python':
+        has_python25_version = True
+
+
+
+      if not server_yaml.server and file_name != 'app.yaml':
+        ErrorUpdate("Error: 'server' parameter not specified in %s" %
+                    yaml_path)
+        continue
+      self.UpdateVersion(rpcserver, self.basepath, server_yaml, file_name)
+    if has_python25_version:
+      MigratePython27Notice()
 
   def Update(self):
     """Updates and deploys a new appversion and global app configs."""
     appyaml = None
     rpcserver = self._GetRpcServer()
-    if os.path.isdir(self.basepath):
-      appyaml = self._ParseAppInfoFromYaml(self.basepath)
-      has_python25_version = appyaml.runtime == 'python'
+    if not os.path.isdir(self.basepath):
+
+      self.UpdateUsingSpecificFiles()
+      return
+
+
+    yaml_file_basename = 'app.yaml'
+    appyaml = self._ParseAppInfoFromYaml(
+        self.basepath,
+        basename=os.path.splitext(yaml_file_basename)[0])
 
 
 
 
-      if self.options.skip_sdk_update_check:
-        logging.info('Skipping update check')
-      else:
-        updatecheck = self.update_check_class(rpcserver, appyaml)
-        updatecheck.CheckForUpdates()
-      self.UpdateVersion(rpcserver, self.basepath, appyaml)
+    if self.options.skip_sdk_update_check:
+      logging.info('Skipping update check')
     else:
-      all_files = [self.basepath] + self.args
-      has_python25_version = False
+      updatecheck = self.update_check_class(rpcserver, appyaml)
+      updatecheck.CheckForUpdates()
+    self.UpdateVersion(rpcserver, self.basepath, appyaml, yaml_file_basename)
 
-      for yaml_path in all_files:
-        file_name = os.path.basename(yaml_path)
-        self.basepath = os.path.dirname(yaml_path)
-        if not self.basepath:
-          self.basepath = '.'
-        server_yaml = self._ParseAppInfoFromYaml(self.basepath,
-                                                 os.path.splitext(file_name)[0])
-        if server_yaml.runtime == 'python':
-          has_python25_version = True
-
-
-
-        if not server_yaml.server and file_name != 'app.yaml':
-          ErrorUpdate("Error: 'server' parameter not specified in %s" %
-                      yaml_path)
-          continue
-        self.UpdateVersion(rpcserver, self.basepath, server_yaml)
-
-    if has_python25_version:
+    if appyaml.runtime == 'python':
       MigratePython27Notice()
 
 
@@ -3358,12 +3115,15 @@ class AppCfgApp(object):
     elif len(self.args) > 1:
       self.parser.error('Expected an optional <backend> argument.')
 
-    appyaml = self._ParseAppInfoFromYaml(self.basepath)
+    yaml_file_basename = 'app'
+    appyaml = self._ParseAppInfoFromYaml(self.basepath,
+                                         basename=yaml_file_basename)
     rpcserver = self._GetRpcServer()
 
     backends_to_update = self.BackendsYamlCheck(appyaml, self.backend)
     for backend in backends_to_update:
-      self.UpdateVersion(rpcserver, self.basepath, appyaml, backend)
+      self.UpdateVersion(rpcserver, self.basepath, appyaml, yaml_file_basename,
+                         backend=backend)
 
   def BackendsList(self):
     """Lists all backends for an app."""
@@ -3504,8 +3264,8 @@ class AppCfgApp(object):
               self.options.version):
         _PrintErrorAndExit(self.error_fh,
                           'Expected at least one <file> argument or the '
-                          '--app_id, --server_id and --version flags to be '
-                          'set.')
+                          '--application, --server_id and --version flags to be'
+                          ' set.')
       else:
         servers_to_process.append((self.options.app_id,
                                    self.options.server_id,
@@ -3549,7 +3309,7 @@ class AppCfgApp(object):
   def Rollback(self):
     """Does a rollback of an existing transaction for this app version."""
     if self.args:
-      self.parser.error('Expected a single <directory> argument.')
+      self.parser.error('Expected a single <directory> or <file> argument.')
     self._Rollback()
 
   def _Rollback(self, backend=None):
@@ -3561,34 +3321,52 @@ class AppCfgApp(object):
     If a backend is specified the rollback will affect only that backend, if no
     backend is specified the rollback will affect the current app version.
     """
-    appyaml = self._ParseAppInfoFromYaml(self.basepath)
-    appversion = AppVersionUpload(self._GetRpcServer(), appyaml, backend)
+    if os.path.isdir(self.basepath):
+      server_yaml = self._ParseAppInfoFromYaml(self.basepath)
+    else:
 
+      file_name = os.path.basename(self.basepath)
+      self.basepath = os.path.dirname(self.basepath)
+      if not self.basepath:
+        self.basepath = '.'
+      server_yaml = self._ParseAppInfoFromYaml(self.basepath,
+                                               os.path.splitext(file_name)[0])
+
+    appversion = AppVersionUpload(self._GetRpcServer(), server_yaml,
+                                  server_yaml_path='app.yaml',
+                                  backend=backend)
 
     appversion.in_transaction = True
     appversion.Rollback()
 
   def SetDefaultVersion(self):
     """Sets the default version."""
+    server = ''
     if len(self.args) == 1:
       appyaml = self._ParseAppInfoFromYaml(self.args[0])
       app_id = appyaml.application
+      server = appyaml.server or ''
       version = appyaml.version
     elif len(self.args) == 0:
       if not (self.options.app_id and self.options.version):
         self.parser.error(
-            ('Expected a <directory> argument or both --app_id and --version '
-             'flags.'))
+            ('Expected a <directory> argument or both --application and '
+             '--version flags.'))
     else:
       self._PrintHelpAndExit()
 
 
     if self.options.app_id:
       app_id = self.options.app_id
+    if self.options.server_id:
+      server = self.options.server_id
     if self.options.version:
       version = self.options.version
 
-    version_setter = DefaultVersionSet(self._GetRpcServer(), app_id, version)
+    version_setter = DefaultVersionSet(self._GetRpcServer(),
+                                       app_id,
+                                       server,
+                                       version)
     version_setter.SetVersion()
 
   def RequestLogs(self):
@@ -3604,8 +3382,8 @@ class AppCfgApp(object):
     elif args_length == 1:
       if not (self.options.app_id and self.options.version):
         self.parser.error(
-            ('Expected a --app_id and --version flags if <directory> argument '
-             'is not specified.'))
+            ('Expected the --application and --version flags if <directory> '
+             'argument is not specified.'))
     else:
       self._PrintHelpAndExit()
 
@@ -4255,7 +4033,7 @@ option to delete them."""),
 
       'rollback': Action(
           function='Rollback',
-          usage='%prog [options] rollback <directory>',
+          usage='%prog [options] rollback <directory> | <file>',
           short_desc='Rollback an in-progress update.',
           long_desc="""
 The 'update' command requires a server-side transaction.
@@ -4346,7 +4124,7 @@ template for use with upload_data or download_data.""",
           long_desc="""
 The 'set_default_version' command sets the default (serving) version of the app.
  Defaults to using the application and version specified in app.yaml; use the
- --app_id and --version flags to override these values.""",
+ --application and --version flags to override these values.""",
           uses_basepath=False),
 
       'resource_limits_info': Action(
