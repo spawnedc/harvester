@@ -3,7 +3,7 @@
 	url = https://github.com/potatolondon/djangotoolbox-1-4
 [submodule "submodules/pytz"]
 	path = submodules/pytz
-	url = https://github.com/potatolondon/django-nonrel-pytz
+	url = https://github.com/potatolondon/gae-pytz.git
 [submodule "submodules/dbindexer"]
 	path = submodules/dbindexer
 	url = https://github.com/potatolondon/dbindexer-1-4
