@@ -16,3 +16,6 @@
 [submodule "submodules/autoload"]
 	path = submodules/autoload
 	url = https://github.com/potatolondon/django-autoload.git
+[submodule "submodules/crispy_forms"]
+	path = submodules/crispy_forms
+	url = git@github.com:maraujop/django-crispy-forms.git

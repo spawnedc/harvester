@@ -475,7 +475,7 @@ class FakeFile(file):
 
   @staticmethod
   def IsFileAccessible(filename, normcase=os.path.normcase,
-                       py27_optional=False):
+                       py27_optional=True):
     """Determines if a file's path is accessible.
 
     SetAllowedPaths(), SetSkippedFiles() and SetStaticFileConfigMatcher() must
@@ -513,7 +513,7 @@ class FakeFile(file):
 
   @staticmethod
   def _IsFileAccessibleNoCache(logical_filename, normcase=os.path.normcase,
-                               py27_optional=False):
+                               py27_optional=True):
     """Determines if a file's path is accessible.
 
     This is an internal part of the IsFileAccessible implementation.

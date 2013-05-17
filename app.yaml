@@ -7,6 +7,7 @@ threadsafe: true
 handlers:
 - url: /.*
   script: harvester.wsgi.application
+  login: required
 
 skip_files:
 - ^google_appengine*

@@ -6,7 +6,9 @@ from django.conf.urls import patterns, include, url
 import dbindexer
 dbindexer.autodiscover() #This needs to happen before anything else, hence strange import ordering
 
-urlpatterns = patterns('',
+urlpatterns = patterns('harvester.views',
+    url(r'^$', 'home', name='home'),
+    url(r'^settings/', 'settings', name='settings'),
     # Examples:
     # url(r'^$', 'harvester.views.home', name='home'),
     # url(r'^harvester/', include('harvester.foo.urls')),

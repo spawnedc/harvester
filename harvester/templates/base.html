@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en" data-ng-app="spudgun.app">
+	<head>
+		<meta charset="utf-8">
+		<title>{% block title %}{% endblock %} - Harvester</title>
+	</head>
+
+	<body>
+		<div id="wrap">
+			<header>
+				{# {% include 'includes/header.html' %} #}
+			</header>
+			<div class="container {% block extra_container_class %}{% endblock %}">
+				{% block content %}{% endblock %}
+			</div>
+			<div id="push"></div>
+		</div>
+		<footer>
+			{# {% include 'includes/footer.html' %} #}
+		</footer>
+	</body>
+</html>
