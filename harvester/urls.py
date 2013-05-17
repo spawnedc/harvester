@@ -8,8 +8,8 @@ dbindexer.autodiscover() #This needs to happen before anything else, hence stran
 
 urlpatterns = patterns('',
     # Examples:
-    # url(r'^$', 'testapp.views.home', name='home'),
-    # url(r'^testapp/', include('testapp.foo.urls')),
+    # url(r'^$', 'harvester.views.home', name='home'),
+    # url(r'^harvester/', include('harvester.foo.urls')),
 
     # Uncomment the admin/doc line below to enable admin documentation:
     # url(r'^admin/doc/', include('django.contrib.admindocs.urls')),
