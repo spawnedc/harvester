@@ -1,0 +1,31 @@
+<div class="navbar navbar-inverse navbar-static-top">
+	<nav id="primary">
+		<div class="navbar-inner">
+			<div class="container">
+
+				<!-- .btn-navbar is used as the toggle for collapsed navbar content -->
+				<a class="btn btn-navbar" data-toggle="collapse" data-target=".nav-collapse">
+					<span class="icon-bar"></span>
+					<span class="icon-bar"></span>
+					<span class="icon-bar"></span>
+				</a>
+
+				<a class="brand" href="{% url home %}">HARVESTER</a>
+
+				<div class="nav-collapse collapse">
+					<ul class="nav">
+						<li{% if section == "home" %} class="active"{% endif %}>
+							<a href="{% url home %}">Home</a>
+						</li>
+					</ul>
+
+					<ul class="nav pull-right">
+						<li{% if section == "settings" %} class="active"{% endif %}>
+							<a href="{% url settings %}">{{ user }}</a>
+						</li>
+					</ul>
+				</div>
+			</div>
+		</div>
+	</nav>
+</div>
