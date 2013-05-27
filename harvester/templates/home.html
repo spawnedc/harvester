@@ -3,5 +3,9 @@
 {% block title %}Home{% endblock %}
 
 {% block content %}
-	HOME
+	<h2>Total hours: {{ report.total_hours }}</h2>
+	{% for project_id, entry in report.entries.items %}
+		<pre>{{ project_id }}: {{ entry }}</pre>
+		<hr>
+	{% endfor %}
 {% endblock %}

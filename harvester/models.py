@@ -24,8 +24,10 @@ class User(HarvesterBaseModel):
     email = models.EmailField()
     data_harvest_app_name = models.CharField(max_length=200)
     data_harvest_auth_key = models.CharField(max_length=200)
+    data_harvest_user_id = models.IntegerField(default=0)
     invoice_harvest_app_name = models.CharField(max_length=200)
     invoice_harvest_auth_key = models.CharField(max_length=200)
+    invoice_harvest_user_id = models.IntegerField(default=0)
 
     def __unicode__(self):
         return self.email

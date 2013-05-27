@@ -2,6 +2,7 @@ from django import forms
 from .models import User
 from crispy_forms.helper import FormHelper
 from crispy_forms.layout import Submit
+from .harvest import Harvest
 
 import base64
 
@@ -53,5 +54,12 @@ class UserSettingsForm(HarvesterBaseModelForm):
         user = super(UserSettingsForm, self).save(*args, **kwargs)
         user.data_harvest_auth_key = self.cleaned_data.get('data_harvest_auth_key')
         user.invoice_harvest_auth_key = self.cleaned_data.get('invoice_harvest_auth_key')
+
+        h_data = Harvest(user.data_harvest_app_name, user.data_harvest_auth_key)
+        user.data_harvest_user_id = int(h_data.user_data.get('user').get('id'))
+
+        h_invoice = Harvest(user.invoice_harvest_app_name, user.invoice_harvest_auth_key)
+        user.invoice_harvest_user_id = int(h_invoice.user_data.get('user').get('id'))
+
         user.save()
         return user
