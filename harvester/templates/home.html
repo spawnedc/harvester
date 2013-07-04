@@ -4,8 +4,8 @@
 
 {% block content %}
 	<h2>Total hours: {{ report.total_hours }}</h2>
-	{% for project_id, entry in report.entries.items %}
-		<pre>{{ project_id }}: {{ entry }}</pre>
+	{% for project_name, entry in report.entries.items %}
+		<pre>{{ project_name }}: {{ entry }}</pre>
 		<hr>
 	{% endfor %}
 {% endblock %}
